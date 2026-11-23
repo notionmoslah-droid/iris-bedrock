@@ -1,0 +1,10 @@
+{
+    "name": "LIRS",
+    "version": "0.1.0",
+    "platform": "Minecraft Bedrock",
+    "preserve_original_packs": true,
+    "automatic_modification": false,
+    "scan_manifests": true,
+    "scan_pbr": true,
+    "scan_vibrant_visuals": true
+}
