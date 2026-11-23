@@ -100,9 +100,12 @@ def scan_one(path):
         manifest = read_manifest(path)
 
         if not manifest["valid"]:
-            return {"success": False, "error": manifest["error"]}
-
-        return {
+    return {
+        "success": False,
+        "error": manifest["reason"]
+   } 
+    
+       return {
             "success": True,
             "pack": {
                 "source": str(path),
