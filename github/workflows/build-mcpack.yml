@@ -1,0 +1,31 @@
+
+name: Build LIRS MCpack
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "LIRS_BP/**"
+      - ".github/workflows/build-mcpack.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build MCpack
+        run: |
+          cd LIRS_BP
+          zip -r ../LIRS-0.1.0.mcpack manifest.json scripts
+
+      - name: Upload MCpack
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIRS-0.1.0-MCpack
+          path: LIRS-0.1.0.mcpack
