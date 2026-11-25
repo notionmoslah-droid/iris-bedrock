@@ -1,89 +1,44 @@
 
 import json
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from .manifest import read_manifest
-from .compatibility import analyze_pack
-
+from .manifest import read_manifest_data
+from .compatibility import analyze_archive_files, analyze_pack
 
 SUPPORTED_FILES = {".mcpack", ".mcaddon", ".zip"}
 
 
-def _archive_graphics(names):
-    texture_sets = sum(
-        name.lower().endswith("texture_set.json")
-        for name in names
-    )
-
-    return {
-        "pbr": texture_sets > 0,
-        "vibrant_visuals_indicators": any(
-            "vibrant_visuals" in name.lower()
-            for name in names
-        ),
-        "texture_sets": texture_sets,
-        "render_controllers": any(
-            name.lower().startswith("render_controllers/")
-            for name in names
-        ),
-        "textures": any(
-            name.lower().startswith("textures/")
-            for name in names
-        ),
-        "warnings": [
-            "Static inspection only; in-game compatibility is unverified."
-        ]
-    }
+def _safe_member(name):
+    """Reject absolute paths and path traversal entries."""
+    path = PurePosixPath(name.replace("\\", "/"))
+    return not path.is_absolute() and ".." not in path.parts
 
 
-def scan_archive(archive_path):
-    archive_path = Path(archive_path)
+def _read_archive_manifests(archive):
+    names = [
+        name for name in archive.namelist()
+        if not name.endswith("/") and _safe_member(name)
+    ]
 
-    try:
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            names = [
-                name for name in archive.namelist()
-                if not name.endswith("/")
-            ]
+    manifests = [
+        name for name in names
+        if PurePosixPath(name).name.lower() == "manifest.json"
+    ]
 
-            manifest_name = next(
-                (
-                    name for name in names
-                    if name.lower() == "manifest.json"
-                    or name.lower().endswith("/manifest.json")
-                ),
-                None
-            )
+    results = []
 
-            if manifest_name is None:
-                return {
-                    "success": False,
-                    "error": "manifest.json not found"
-                }
-
+    for manifest_name in manifests:
+        try:
             with archive.open(manifest_name) as file:
                 data = json.load(file)
 
-            if not isinstance(data, dict):
-                return {
-                    "success": False,
-                    "error": "Manifest must be a JSON object"
-                }
+            manifest = read_manifest_data(data)
+            if not manifest["valid"]:
+                continue
 
-            header = data.get("header")
-
-            if not isinstance(header, dict):
-                return {
-                    "success": False,
-                    "error": "Invalid or missing manifest header"
-                }
-
-            prefix = manifest_name.rsplit("/", 1)[0]
-            if prefix == manifest_name:
-                prefix = ""
-            else:
-                prefix += "/"
+            parent = str(PurePosixPath(manifest_name).parent)
+            prefix = "" if parent == "." else parent + "/"
 
             pack_files = [
                 name[len(prefix):]
@@ -91,36 +46,62 @@ def scan_archive(archive_path):
                 if name.startswith(prefix)
             ]
 
-            manifest = {
-                "valid": True,
-                "name": header.get("name", "Unknown"),
-                "description": header.get("description", ""),
-                "uuid": header.get("uuid"),
-                "version": header.get("version"),
-                "min_engine_version": header.get("min_engine_version"),
-                "format_version": data.get("format_version"),
-                "modules": data.get("modules", [])
-            }
+            results.append({
+                "source": manifest_name,
+                "manifest": manifest,
+                "graphics": analyze_archive_files(pack_files)
+            })
 
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+
+    return results
+
+
+def scan_archive(archive_path):
+    archive_path = Path(archive_path).expanduser()
+
+    try:
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            found = _read_archive_manifests(archive)
+
+        if not found:
             return {
-                "success": True,
-                "pack": {
-                    "source": str(archive_path),
-                    "type": "archive",
-                    "manifest": manifest,
-                    "graphics": _archive_graphics(pack_files)
-                }
+                "success": False,
+                "error": "No valid manifest.json found in archive",
+                "source": str(archive_path)
             }
 
-    except (
-        zipfile.BadZipFile,
-        json.JSONDecodeError,
-        OSError,
-        ValueError
-    ) as error:
+        packs = [
+            {
+                "source": f"{archive_path}!/{item['source']}",
+                "type": "archive",
+                "manifest": item["manifest"],
+                "graphics": item["graphics"]
+            }
+            for item in found
+        ]
+
+        return {
+            "success": True,
+            "pack": packs[0] if len(packs) == 1 else {
+                "source": str(archive_path),
+                "type": "archive_bundle",
+                "manifest": {
+                    "valid": True,
+                    "name": archive_path.stem,
+                    "description": "Multiple packs found in this archive"
+                },
+                "graphics": {},
+                "packs": packs
+            }
+        }
+
+    except (zipfile.BadZipFile, OSError, ValueError) as error:
         return {
             "success": False,
-            "error": str(error)
+            "error": str(error),
+            "source": str(archive_path)
         }
 
 
@@ -128,7 +109,7 @@ def scan_one(path):
     path = Path(path).expanduser()
 
     if path.is_dir():
-        manifest = read_manifest(path)
+        manifest = read_manifest_data_from_folder(path)
 
         if not manifest["valid"]:
             return {
@@ -157,6 +138,11 @@ def scan_one(path):
     }
 
 
+def read_manifest_data_from_folder(path):
+    from .manifest import read_manifest
+    return read_manifest(path)
+
+
 def scan_directory(directory):
     directory = Path(directory).expanduser()
 
@@ -177,7 +163,11 @@ def scan_directory(directory):
         result = scan_one(item)
 
         if result["success"]:
-            packs.append(result["pack"])
+            pack = result["pack"]
+            if pack.get("type") == "archive_bundle":
+                packs.extend(pack["packs"])
+            else:
+                packs.append(pack)
         else:
             errors.append({
                 "source": result.get("source", str(item)),
