@@ -1,36 +1,46 @@
+
 import argparse
 import json
 
-from src.lirs.scanner import scan_directory
 from src.lirs import VERSION, NAME
+from src.lirs.shaderpacks import (
+    create_shaderpacks_folder,
+    discover_shaderpacks
+)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="LIRS Bedrock Resource Pack Scanner"
+        description="LIRS - Lightweight Iris Resource System"
     )
 
     parser.add_argument(
         "--scan",
-        default="resource_packs",
-        help="Directory containing resource packs"
+        default="shaderpacks",
+        help="Shaderpacks directory"
     )
 
     parser.add_argument(
-        "--bedrock-version",
-        default=None,
-        help="Target Minecraft Bedrock version"
+        "--init",
+        action="store_true",
+        help="Create shaderpacks directory"
     )
 
     args = parser.parse_args()
 
     print(f"{NAME} v{VERSION}")
-    print("Scanning resource packs...\n")
 
-    results = scan_directory(args.scan)
+    if args.init:
+        folder = create_shaderpacks_folder(args.scan)
+        print(f"Created: {folder}")
+        return
+
+    print("Scanning shaderpacks...")
+
+    result = discover_shaderpacks(args.scan)
 
     print(json.dumps(
-        results,
+        result,
         indent=4,
         ensure_ascii=False
     ))
@@ -38,4 +48,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
